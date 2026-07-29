@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: img-x86_64-unknown-linux-gnu
+            bin_path: target/x86_64-unknown-linux-gnu/release/img
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: img-x86_64-apple-darwin
+            bin_path: target/x86_64-apple-darwin/release/img
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: img-aarch64-apple-darwin
+            bin_path: target/aarch64-apple-darwin/release/img
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: img-x86_64-pc-windows-msvc
+            bin_path: target/x86_64-pc-windows-msvc/release/img.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          strip "${{ matrix.bin_path }}" 2>/dev/null || true
+          tar czf "${{ matrix.artifact }}.tar.gz" \
+            -C "$(dirname "${{ matrix.bin_path }}")" \
+            "$(basename "${{ matrix.bin_path }}")"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "${{ matrix.bin_path }}" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
+          generate_release_notes: true
