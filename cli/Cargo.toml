@@ -1,0 +1,16 @@
+[package]
+name = "cli"
+version = "0.2.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "img"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = "4.6.4"
+img = { path = "../img" }
