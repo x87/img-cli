@@ -2,9 +2,19 @@
 
 use anyhow::Context;
 use clap::{Command, arg};
+use glob::{MatchOptions, Pattern, glob};
 use img::{AddFileResult, IMGArchive, MAX_NAME_LEN};
+use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+fn name_match_options() -> MatchOptions {
+    MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: false,
+        ..MatchOptions::new()
+    }
+}
 
 pub fn cli() -> Command {
     Command::new("img")
@@ -23,13 +33,19 @@ pub fn cli() -> Command {
                 .about("adds a file to the archive")
                 .arg_required_else_help(true)
                 .arg(arg!(<IMG> "IMG file to process").value_parser(clap::value_parser!(String)))
-                .arg(arg!(<PATH> ... "Files to add").value_parser(clap::value_parser!(String))),
+                .arg(arg!(<PATH> ... "Files to add").value_parser(clap::value_parser!(String)))
+                .arg(
+                    arg!(-x --exclude <PATTERN> "Skip paths matching this pattern")
+                        .action(clap::ArgAction::Append)
+                        .value_parser(clap::value_parser!(String)),
+                ),
         )
         .subcommand(
             Command::new("list")
                 .about("lists the files in the archive")
                 .arg_required_else_help(false)
-                .arg(arg!(<IMG> "IMG file to process").value_parser(clap::value_parser!(String))),
+                .arg(arg!(<IMG> "IMG file to process").value_parser(clap::value_parser!(String)))
+                .arg(arg!(--json "Output entries as JSON")),
         )
         .subcommand(
             Command::new("cat")
@@ -64,6 +80,11 @@ pub fn cli() -> Command {
                 .arg(
                     arg!(<NAME> ... "Names of files to remove")
                         .value_parser(clap::value_parser!(String)),
+                )
+                .arg(
+                    arg!(-x --exclude <PATTERN> "Skip archive names matching this pattern")
+                        .action(clap::ArgAction::Append)
+                        .value_parser(clap::value_parser!(String)),
                 ),
         )
 }
@@ -79,27 +100,51 @@ pub fn create_archive(img: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn list_archive(img: &str) -> anyhow::Result<Vec<String>> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListEntry {
+    pub offset: u32,
+    pub name: String,
+    pub size: u32,
+}
+
+pub fn list_archive_entries(img: &str) -> anyhow::Result<Vec<ListEntry>> {
     let img_path = PathBuf::from(img);
     let archive = IMGArchive::from_path(&img_path)?;
     Ok(archive
         .list_entries()
         .into_iter()
-        .map(|(offset, entry)| {
-            format!(
-                "{:08}: {} ({} bytes)",
-                offset,
-                entry.name,
-                entry.stored_size()
-            )
+        .map(|(offset, entry)| ListEntry {
+            offset,
+            name: entry.name.clone(),
+            size: entry.stored_size(),
         })
         .collect())
+}
+
+pub fn format_list_entry(entry: &ListEntry) -> String {
+    format!(
+        "{:08}: {} ({} bytes)",
+        entry.offset, entry.name, entry.size
+    )
+}
+
+pub fn list_archive(img: &str) -> anyhow::Result<Vec<String>> {
+    Ok(list_archive_entries(img)?
+        .iter()
+        .map(format_list_entry)
+        .collect())
+}
+
+pub fn list_archive_json(img: &str) -> anyhow::Result<String> {
+    let entries = list_archive_entries(img)?;
+    Ok(serde_json::to_string_pretty(&entries)?)
 }
 
 pub fn read_files(img: &str, names: &[&str]) -> anyhow::Result<Vec<Vec<u8>>> {
     let img_path = PathBuf::from(img);
     let mut archive = IMGArchive::from_path(&img_path)?;
-    names
+    let resolved = expand_name_patterns(&archive, names, NameMatchMode::Error)?;
+    resolved
         .iter()
         .map(|name| archive.read_file(name))
         .collect()
@@ -129,9 +174,10 @@ pub fn extract_files(img: &str, names: Vec<&str>, output: Option<&str>) -> anyho
     }
 
     let mut archive = IMGArchive::from_path(&img_path)?;
-    for name in names {
-        let content = archive.read_file(name)?;
-        let out_path = output_dir.join(name);
+    let resolved = expand_name_patterns(&archive, &names, NameMatchMode::Error)?;
+    for name in resolved {
+        let content = archive.read_file(&name)?;
+        let out_path = output_dir.join(&name);
         std::fs::write(&out_path, content).with_context(|| {
             format!("failed to write extracted file {}", out_path.display())
         })?;
@@ -140,11 +186,135 @@ pub fn extract_files(img: &str, names: Vec<&str>, output: Option<&str>) -> anyho
     Ok(())
 }
 
-pub fn add_files(img: &str, paths: Vec<&str>) -> anyhow::Result<()> {
+#[derive(Clone, Copy)]
+enum NameMatchMode {
+    Warn,
+    Error,
+}
+
+fn compile_glob_patterns(patterns: &[&str]) -> anyhow::Result<Vec<Pattern>> {
+    patterns
+        .iter()
+        .map(|pattern| {
+            Pattern::new(pattern)
+                .with_context(|| format!("invalid glob pattern: {pattern}"))
+        })
+        .collect()
+}
+
+fn matches_any(candidate: &str, patterns: &[Pattern]) -> bool {
+    let options = name_match_options();
+    patterns
+        .iter()
+        .any(|pattern| pattern.matches_with(candidate, options))
+}
+
+fn path_exclusion_candidates(path: &Path) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(name) = path.file_name().and_then(|part| part.to_str()) {
+        candidates.push(name.to_string());
+    }
+    candidates.push(path.to_string_lossy().into_owned());
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(relative) = path.strip_prefix(&cwd) {
+            candidates.push(relative.to_string_lossy().into_owned());
+        }
+    }
+    candidates
+}
+
+fn apply_path_excludes(
+    paths: Vec<PathBuf>,
+    excludes: &[&str],
+) -> anyhow::Result<Vec<PathBuf>> {
+    if excludes.is_empty() {
+        return Ok(paths);
+    }
+    let exclude_patterns = compile_glob_patterns(excludes)?;
+    Ok(paths
+        .into_iter()
+        .filter(|path| {
+            !path_exclusion_candidates(path)
+                .iter()
+                .any(|candidate| matches_any(candidate, &exclude_patterns))
+        })
+        .collect())
+}
+
+fn apply_name_excludes(names: Vec<String>, excludes: &[&str]) -> anyhow::Result<Vec<String>> {
+    if excludes.is_empty() {
+        return Ok(names);
+    }
+    let exclude_patterns = compile_glob_patterns(excludes)?;
+    Ok(names
+        .into_iter()
+        .filter(|name| !matches_any(name, &exclude_patterns))
+        .collect())
+}
+
+fn expand_path_patterns(patterns: &[&str]) -> anyhow::Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+    for pattern in patterns {
+        let matches: Vec<PathBuf> = glob(pattern)
+            .with_context(|| format!("invalid glob pattern: {pattern}"))?
+            .filter_map(|entry| entry.ok())
+            .filter(|path| path.is_file())
+            .collect();
+        if matches.is_empty() {
+            eprintln!("warning: no files matched pattern: {pattern}");
+            continue;
+        }
+        expanded.extend(matches);
+    }
+    expanded.sort();
+    expanded.dedup();
+    Ok(expanded)
+}
+
+fn expand_name_patterns(
+    archive: &IMGArchive,
+    patterns: &[&str],
+    mode: NameMatchMode,
+) -> anyhow::Result<Vec<String>> {
+    let entry_names: Vec<String> = archive
+        .list_entries()
+        .into_iter()
+        .map(|(_, entry)| entry.name.clone())
+        .collect();
+
+    let options = name_match_options();
+
+    let mut matched = Vec::new();
+    for pattern in patterns {
+        let glob = Pattern::new(pattern)
+            .with_context(|| format!("invalid glob pattern: {pattern}"))?;
+        let hits: Vec<String> = entry_names
+            .iter()
+            .filter(|name| glob.matches_with(name, options))
+            .cloned()
+            .collect();
+        if hits.is_empty() {
+            match mode {
+                NameMatchMode::Warn => {
+                    eprintln!("warning: no entries matched pattern: {pattern}");
+                }
+                NameMatchMode::Error => {
+                    anyhow::bail!("no entries matched pattern: {pattern}");
+                }
+            }
+        } else {
+            matched.extend(hits);
+        }
+    }
+    matched.sort();
+    matched.dedup();
+    Ok(matched)
+}
+
+pub fn add_files(img: &str, paths: Vec<&str>, excludes: &[&str]) -> anyhow::Result<()> {
     let img_path = PathBuf::from(img);
     let mut archive = IMGArchive::from_path(&img_path)?;
-    for path in paths {
-        let path = PathBuf::from(path);
+    for path in apply_path_excludes(expand_path_patterns(&paths)?, excludes)? {
         let basename = path
             .file_name()
             .with_context(|| format!("failed to get basename for {}", path.display()))?;
@@ -170,11 +340,14 @@ pub fn add_files(img: &str, paths: Vec<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn remove_files(img: &str, names: Vec<&str>) -> anyhow::Result<()> {
+pub fn remove_files(img: &str, names: Vec<&str>, excludes: &[&str]) -> anyhow::Result<()> {
     let img_path = PathBuf::from(img);
     let mut archive = IMGArchive::from_path(&img_path)?;
-    for name in names {
-        let removed = archive.remove_file(name);
+    for name in apply_name_excludes(
+        expand_name_patterns(&archive, &names, NameMatchMode::Warn)?,
+        excludes,
+    )? {
+        let removed = archive.remove_file(&name);
         if removed == 0 {
             eprintln!("warning: {name} not found in archive, skipping");
         }
@@ -209,8 +382,12 @@ pub fn run_matches(matches: &clap::ArgMatches) -> anyhow::Result<()> {
             let img = sub_matches
                 .get_one::<String>("IMG")
                 .context("missing IMG argument")?;
-            for line in list_archive(img)? {
-                println!("{line}");
+            if sub_matches.get_flag("json") {
+                println!("{}", list_archive_json(img)?);
+            } else {
+                for line in list_archive(img)? {
+                    println!("{line}");
+                }
             }
         }
         Some(("cat", sub_matches)) => {
@@ -233,13 +410,21 @@ pub fn run_matches(matches: &clap::ArgMatches) -> anyhow::Result<()> {
             let img = sub_matches
                 .get_one::<String>("IMG")
                 .context("missing IMG argument")?;
-            add_files(img, matches_to_vec_str(sub_matches, "PATH"))?;
+            add_files(
+                img,
+                matches_to_vec_str(sub_matches, "PATH"),
+                &matches_to_vec_str(sub_matches, "exclude"),
+            )?;
         }
         Some(("remove", sub_matches)) => {
             let img = sub_matches
                 .get_one::<String>("IMG")
                 .context("missing IMG argument")?;
-            remove_files(img, matches_to_vec_str(sub_matches, "NAME"))?;
+            remove_files(
+                img,
+                matches_to_vec_str(sub_matches, "NAME"),
+                &matches_to_vec_str(sub_matches, "exclude"),
+            )?;
         }
         _ => unreachable!(),
     }

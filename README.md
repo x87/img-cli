@@ -28,18 +28,26 @@ img new myarchive.img
 # Add one or more files (entry name is the file basename)
 img add myarchive.img file1.txt file2.bin
 
+# Glob patterns are expanded relative to the current directory
+img add myarchive.img folder/*.scm
+img add myarchive.img folder/* --exclude '*.bak'
+
 # List entries with computed offsets and padded sizes
 img list myarchive.img
+img list myarchive.img --json
 
-# Print entry contents to stdout
+# Print entry contents to stdout (supports glob patterns)
 img cat myarchive.img file1.txt
+img cat myarchive.img '*.md'
 
 # Extract entries to the current directory or -o DIR
 img extract myarchive.img file1.txt file2.bin
-img extract myarchive.img file1.txt -o ./out
+img extract myarchive.img '*.scm' -o ./out
 
-# Remove entries by name
+# Remove entries by name (supports glob patterns)
 img remove myarchive.img file1.txt
+img remove myarchive.img '*.scm'
+img remove myarchive.img '*.scm' --exclude 'init.scm'
 ```
 
 ### Example `list` output
@@ -50,3 +58,16 @@ img remove myarchive.img file1.txt
 ```
 
 Sizes reflect sector-padded storage (actual file length may be smaller).
+
+### Example `list --json` with jq
+
+```bash
+# Entry names, one per line
+img list myarchive.img --json | jq -r '.[].name'
+
+# Entries matching a suffix
+img list myarchive.img --json | jq '.[] | select(.name | endswith(".scm"))'
+
+# Total stored bytes (including sector padding)
+img list myarchive.img --json | jq '[.[].size] | add'
+```

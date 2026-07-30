@@ -12,7 +12,7 @@ An IMG V2 file is a sector-aligned binary container for bundling named files. It
 ## Header (8 bytes)
 
 | Offset | Size | Field     | Description                          |
-|--------|------|-----------|--------------------------------------|
+| ------ | ---- | --------- | ------------------------------------ |
 | 0x00   | 4    | signature | ASCII `VER2`                         |
 | 0x04   | 4    | count     | Number of directory entries (u32 LE) |
 
@@ -20,12 +20,12 @@ An IMG V2 file is a sector-aligned binary container for bundling named files. It
 
 Written contiguously immediately after the header. Payload bytes are **not** inline; they follow the entire directory table.
 
-| Offset | Size | Field   | Description                                      |
-|--------|------|---------|--------------------------------------------------|
-| 0x00   | 4    | offset  | Byte offset of this entry's payload in the file  |
-| 0x04   | 2    | sectors | Payload length in 2048-byte sectors              |
-| 0x06   | 2    | size    | Reserved (always 0)                              |
-| 0x08   | 24   | name    | Null-padded ASCII filename (max 23 chars)        |
+| Offset | Size | Field   | Description                                     |
+| ------ | ---- | ------- | ----------------------------------------------- |
+| 0x00   | 4    | offset  | Byte offset of this entry's payload in the file |
+| 0x04   | 2    | sectors | Payload length in 2048-byte sectors             |
+| 0x06   | 2    | size    | Reserved (always 0)                             |
+| 0x08   | 24   | name    | Null-padded ASCII filename (max 23 chars)       |
 
 ## Payloads
 
