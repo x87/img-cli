@@ -48,6 +48,11 @@ img extract myarchive.img '*.scm' -o ./out
 img remove myarchive.img file1.txt
 img remove myarchive.img '*.scm'
 img remove myarchive.img '*.scm' --exclude 'init.scm'
+
+# Find entries by name (exact match by default; use wildcards for glob)
+img find myarchive.img player.dff
+img find myarchive.img '*player*'
+img find myarchive.img '*.scm' --json
 ```
 
 ### Example `list` output

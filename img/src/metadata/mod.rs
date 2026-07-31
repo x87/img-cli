@@ -93,8 +93,15 @@ impl IMGDirectory {
         Ok(Self { entries })
     }
 
-    pub fn into_entries(self) -> Vec<IMGEntry> {
-        self.entries.into_iter().map(IMGEntry::from).collect()
+    pub fn into_entries(self, payload_base: u32) -> Vec<IMGEntry> {
+        self.entries
+            .into_iter()
+            .map(|e| {
+                let mut entry = IMGEntry::from(e);
+                entry.offset = entry.offset.saturating_add(payload_base);
+                entry
+            })
+            .collect()
     }
 
     /// Total byte length of on-disk payload regions referenced by this directory table.

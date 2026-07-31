@@ -263,3 +263,126 @@ fn list_json_output() {
 
     cleanup_tree(name);
 }
+
+#[test]
+fn find_matches_with_glob() {
+    let name = "cli-find-glob";
+    cleanup_tree(name);
+
+    let archive = temp_path(name, &["store.img"]);
+    create_archive(path_str(&archive)).unwrap();
+
+    let a = write_input(name, &["sources", "a.scm"], b"a");
+    let b = write_input(name, &["sources", "b.scm"], b"b");
+    let keep = write_input(name, &["sources", "keep.txt"], b"keep");
+    add_files(
+        path_str(&archive),
+        vec![path_str(&a), path_str(&b), path_str(&keep)],
+        &[],
+    )
+    .unwrap();
+
+    let entries = find_entries(path_str(&archive), &["*.scm"]).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().any(|e| e.name == "a.scm"));
+    assert!(entries.iter().any(|e| e.name == "b.scm"));
+
+    cleanup_tree(name);
+}
+
+#[test]
+fn find_matches_exact_name() {
+    let name = "cli-find-exact";
+    cleanup_tree(name);
+
+    let archive = temp_path(name, &["store.img"]);
+    let source = write_input(name, &["sources", "player.dff"], b"player model");
+
+    create_archive(path_str(&archive)).unwrap();
+    add_files(path_str(&archive), vec![path_str(&source)], &[]).unwrap();
+
+    let entries = find_entries(path_str(&archive), &["player.dff"]).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "player.dff");
+
+    cleanup_tree(name);
+}
+
+#[test]
+fn find_matches_multiple_patterns() {
+    let name = "cli-find-multi";
+    cleanup_tree(name);
+
+    let archive = temp_path(name, &["store.img"]);
+    create_archive(path_str(&archive)).unwrap();
+
+    let a = write_input(name, &["sources", "a.scm"], b"a");
+    let b = write_input(name, &["sources", "b.scm"], b"b");
+    let c = write_input(name, &["sources", "c.txt"], b"c");
+    add_files(
+        path_str(&archive),
+        vec![path_str(&a), path_str(&b), path_str(&c)],
+        &[],
+    )
+    .unwrap();
+
+    let entries = find_entries(path_str(&archive), &["a.*", "*.txt"]).unwrap();
+    assert_eq!(entries.len(), 2);
+
+    cleanup_tree(name);
+}
+
+#[test]
+fn find_case_insensitive() {
+    let name = "cli-find-case";
+    cleanup_tree(name);
+
+    let archive = temp_path(name, &["store.img"]);
+    let source = write_input(name, &["sources", "README.md"], b"# readme");
+
+    create_archive(path_str(&archive)).unwrap();
+    add_files(path_str(&archive), vec![path_str(&source)], &[]).unwrap();
+
+    let entries = find_entries(path_str(&archive), &["readme.md"]).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "README.md");
+
+    cleanup_tree(name);
+}
+
+#[test]
+fn find_json_output() {
+    let name = "cli-find-json";
+    cleanup_tree(name);
+
+    let archive = temp_path(name, &["store.img"]);
+    let source = write_input(name, &["files", "one.txt"], b"hello");
+
+    create_archive(path_str(&archive)).unwrap();
+    add_files(path_str(&archive), vec![path_str(&source)], &[]).unwrap();
+
+    let json = find_entries(path_str(&archive), &["one.txt"]).unwrap();
+    let serialized = serde_json::to_string_pretty(&json).unwrap();
+    let deserialized: Vec<ListEntry> = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.len(), 1);
+    assert_eq!(deserialized[0].name, "one.txt");
+
+    cleanup_tree(name);
+}
+
+#[test]
+fn find_no_match_errors() {
+    let name = "cli-find-no-match";
+    cleanup_tree(name);
+
+    let archive = temp_path(name, &["store.img"]);
+    let source = write_input(name, &["sources", "a.txt"], b"a");
+
+    create_archive(path_str(&archive)).unwrap();
+    add_files(path_str(&archive), vec![path_str(&source)], &[]).unwrap();
+
+    let result = find_entries(path_str(&archive), &["*.scm"]);
+    assert!(result.is_err());
+
+    cleanup_tree(name);
+}

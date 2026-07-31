@@ -77,15 +77,17 @@ pub fn verify_on_disk_spec(bytes: &[u8], expected: &[(String, Vec<u8>)]) {
         "directory entries must be sorted by name on disk"
     );
 
-    let mut cursor = payload_base;
+    // Offsets are relative to the start of the payload region.
+    let mut cursor = 0;
     for (name, offset, sectors) in &parsed_entries {
         assert_eq!(
             *offset as usize, cursor,
             "payload offset mismatch for {name}"
         );
 
+        let payload_base_abs = payload_base;
         let padded_len = *sectors as usize * crate::SECTOR_SIZE;
-        let payload = &bytes[cursor..cursor + padded_len];
+        let payload = &bytes[payload_base_abs + cursor..payload_base_abs + cursor + padded_len];
         let original = expected_by_name[name.as_str()];
 
         assert_eq!(&payload[..original.len()], original, "payload bytes for {name}");
@@ -96,5 +98,5 @@ pub fn verify_on_disk_spec(bytes: &[u8], expected: &[(String, Vec<u8>)]) {
 
         cursor += padded_len;
     }
-    assert_eq!(cursor, bytes.len());
+    assert_eq!(cursor + payload_base, bytes.len());
 }

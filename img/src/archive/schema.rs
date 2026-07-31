@@ -46,7 +46,7 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for IMGArchive {
         let metadata = <IMGMetadata as SchemaRead<'de, C>>::get(reader.by_ref())?;
         let payload_base = metadata.payload_base();
         let payload_len = metadata.directory.on_disk_payload_len();
-        let directory = metadata.directory.into_entries();
+        let directory = metadata.directory.into_entries(payload_base);
         let payload_blob = if payload_len > 0 {
             let mut blob = vec![0u8; payload_len];
             for byte in &mut blob {

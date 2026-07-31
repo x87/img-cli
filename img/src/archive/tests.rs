@@ -156,15 +156,15 @@ fn rebase_sorts_entries_and_assigns_offsets() {
     assert_eq!(names, vec!["a.txt", "m.txt", "z.txt"]);
     assert_eq!(archive.header.count, 3);
 
-    let first_offset = HEADER_SIZE + 3 * DIRECTORY_ENTRY_SIZE;
-    assert_eq!(archive.entries()[0].offset, first_offset as u32);
+    // Offsets are relative to the start of the payload region.
+    assert_eq!(archive.entries()[0].offset, 0);
     assert_eq!(
         archive.entries()[1].offset,
-        (first_offset + crate::SECTOR_SIZE) as u32
+        crate::SECTOR_SIZE as u32
     );
     assert_eq!(
         archive.entries()[2].offset,
-        (first_offset + 2 * crate::SECTOR_SIZE) as u32
+        2 * crate::SECTOR_SIZE as u32
     );
 }
 
@@ -476,7 +476,7 @@ fn rebase_propagates_payload_load_error() {
         name: "missing.txt".to_string(),
         flags: 0,
     });
-    archive.payload_base = HEADER_SIZE as u32;
+    archive.header.count = 1;
     archive.sync_header_count();
 
     let err = archive.rebase().unwrap_err();

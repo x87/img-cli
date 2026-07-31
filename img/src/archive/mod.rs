@@ -28,7 +28,7 @@ enum ArchiveSource {
 pub struct IMGArchive {
     pub header: IMGHeader,
     pub(crate) directory: Vec<IMGEntry>,
-    /// Absolute file offset where `payload_blob` begins.
+    /// File offset where the payload blob begins (stable after init).
     payload_base: u32,
     /// Contiguous on-disk payload region; loaded on first payload access.
     payload_blob: Option<Vec<u8>>,
@@ -68,7 +68,7 @@ impl IMGArchive {
         let payload_base = metadata.payload_base();
         Ok(Self {
             header: metadata.header,
-            directory: metadata.directory.into_entries(),
+            directory: metadata.directory.into_entries(payload_base),
             payload_base,
             payload_blob: None,
             scratch: Vec::new(),
@@ -98,7 +98,7 @@ impl IMGArchive {
         let payload_base = metadata.payload_base();
         Ok(Self {
             header: metadata.header,
-            directory: metadata.directory.into_entries(),
+            directory: metadata.directory.into_entries(payload_base),
             payload_base,
             payload_blob: None,
             scratch: Vec::new(),
@@ -259,14 +259,13 @@ impl IMGArchive {
             self.ensure_payload_loaded()?;
         }
 
-        let payload_start = self.get_payload_start();
+        let payload_base = self.get_payload_start();
 
         let mut entries: Vec<IMGEntry> = self.entries().iter().map(|entry| (*entry).clone()).collect();
         self.directory.clear();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut new_blob = Vec::new();
-        let mut offset = payload_start;
 
         for entry in &mut entries {
             let len = entry.sectors as usize * crate::SECTOR_SIZE;
@@ -278,18 +277,17 @@ impl IMGArchive {
                     .payload_blob
                     .as_ref()
                     .context("main blob present for on-disk entry")?;
-                let start = entry.offset as usize - self.payload_base as usize;
+                let start = (entry.offset as usize).saturating_sub(self.payload_base as usize);
                 blob[start..start + len].to_vec()
             };
 
-            entry.offset = offset as u32;
+            entry.offset = new_blob.len() as u32;
             entry.flags &= !FLAG_SCRATCH;
-            offset += len;
             new_blob.extend_from_slice(&data);
         }
 
         self.directory = entries;
-        self.payload_base = payload_start as u32;
+        self.payload_base = payload_base as u32;
         self.payload_blob = Some(new_blob);
         self.scratch.clear();
         self.source = None;
@@ -356,7 +354,16 @@ impl IMGArchive {
             .payload_blob
             .as_ref()
             .context("no payload blob available")?;
-        let start = entry.offset as usize - self.payload_base as usize;
+        let start = (entry.offset as usize).saturating_sub(self.payload_base as usize);
+        if start + len > blob.len() {
+            bail!(
+                "entry '{}' offset {} + len {} exceeds payload blob size {}",
+                entry.name,
+                start,
+                len,
+                blob.len()
+            );
+        }
         Ok(&blob[start..start + len])
     }
 

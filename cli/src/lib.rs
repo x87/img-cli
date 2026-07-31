@@ -73,6 +73,14 @@ pub fn cli() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("find")
+                .about("lists files matching wildcard patterns")
+                .arg_required_else_help(true)
+                .arg(arg!(<IMG> "IMG file to process").value_parser(clap::value_parser!(String)))
+                .arg(arg!(<NAME> ... "Wildcard patterns to match").value_parser(clap::value_parser!(String)))
+                .arg(arg!(--json "Output entries as JSON")),
+        )
+        .subcommand(
             Command::new("remove")
                 .about("removes a file from the archive")
                 .arg_required_else_help(true)
@@ -138,6 +146,22 @@ pub fn list_archive(img: &str) -> anyhow::Result<Vec<String>> {
 pub fn list_archive_json(img: &str) -> anyhow::Result<String> {
     let entries = list_archive_entries(img)?;
     Ok(serde_json::to_string_pretty(&entries)?)
+}
+
+pub fn find_entries(img: &str, patterns: &[&str]) -> anyhow::Result<Vec<ListEntry>> {
+    let names = expand_name_patterns(
+        &IMGArchive::from_path(&PathBuf::from(img))?,
+        patterns,
+        NameMatchMode::Error,
+    )?;
+    let all_entries: std::collections::HashMap<_, _> = list_archive_entries(img)?
+        .into_iter()
+        .map(|e| (e.name.clone(), e))
+        .collect();
+    Ok(names
+        .into_iter()
+        .filter_map(|name| all_entries.get(&name).cloned())
+        .collect())
 }
 
 pub fn read_files(img: &str, names: &[&str]) -> anyhow::Result<Vec<Vec<u8>>> {
@@ -415,6 +439,21 @@ pub fn run_matches(matches: &clap::ArgMatches) -> anyhow::Result<()> {
                 matches_to_vec_str(sub_matches, "PATH"),
                 &matches_to_vec_str(sub_matches, "exclude"),
             )?;
+        }
+        Some(("find", sub_matches)) => {
+            let img = sub_matches
+                .get_one::<String>("IMG")
+                .context("missing IMG argument")?;
+            let patterns = matches_to_vec_str(sub_matches, "NAME");
+            if sub_matches.get_flag("json") {
+                let entries = find_entries(img, &patterns)?;
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else {
+                let entries = find_entries(img, &patterns)?;
+                for entry in &entries {
+                    println!("{}", format_list_entry(entry));
+                }
+            }
         }
         Some(("remove", sub_matches)) => {
             let img = sub_matches
