@@ -7,7 +7,9 @@ fn temp_root(name: &str) -> PathBuf {
 }
 
 fn temp_path(name: &str, parts: &[&str]) -> PathBuf {
-    let path = parts.iter().fold(temp_root(name), |base, part| base.join(part));
+    let path = parts
+        .iter()
+        .fold(temp_root(name), |base, part| base.join(part));
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
@@ -40,6 +42,28 @@ fn new_creates_archive_in_nested_directory() {
     cleanup_tree(name);
 }
 
+/// Extraction is lossless: the stored payload is returned sector-padded
+/// (original bytes first, then zero padding) because real payloads may
+/// legitimately end in 0x00. Assert the original bytes are a prefix and the
+/// remainder is zero padding.
+fn assert_padded(content: &[u8], expected: &[u8]) {
+    assert!(
+        content.len() >= expected.len(),
+        "content {}B shorter than expected {}B",
+        content.len(),
+        expected.len()
+    );
+    assert_eq!(
+        &content[..expected.len()],
+        expected,
+        "content prefix mismatch"
+    );
+    assert!(
+        content[expected.len()..].iter().all(|b| *b == 0),
+        "trailing bytes must be zero padding"
+    );
+}
+
 #[test]
 fn add_reads_from_nested_input_paths() {
     let name = "cli-add-nested";
@@ -52,7 +76,7 @@ fn add_reads_from_nested_input_paths() {
     add_files(path_str(&archive), vec![path_str(&input)], &[]).unwrap();
 
     let contents = read_files(path_str(&archive), &["hello.txt"]).unwrap();
-    assert_eq!(contents, vec![b"from nested dir".to_vec()]);
+    assert_padded(&contents[0], b"from nested dir");
 
     cleanup_tree(name);
 }
@@ -76,7 +100,7 @@ fn extract_writes_to_nested_output_directory() {
     )
     .unwrap();
 
-    assert_eq!(fs::read(&extracted).unwrap(), b"payload bytes");
+    assert_padded(&fs::read(&extracted).unwrap(), b"payload bytes");
 
     cleanup_tree(name);
 }
@@ -113,7 +137,9 @@ fn add_expands_glob_patterns() {
     add_files(path_str(&archive), vec![path_str(&pattern)], &[]).unwrap();
 
     let contents = read_files(path_str(&archive), &["a.scm", "b.scm"]).unwrap();
-    assert_eq!(contents, vec![b"alpha".to_vec(), b"beta".to_vec()]);
+    assert_eq!(contents.len(), 2);
+    assert_padded(&contents[0], b"alpha");
+    assert_padded(&contents[1], b"beta");
 
     cleanup_tree(name);
 }
@@ -158,7 +184,7 @@ fn cat_matches_entry_names_case_insensitively() {
     add_files(path_str(&archive), vec![path_str(&source)], &[]).unwrap();
 
     let contents = read_files(path_str(&archive), &["readme.md"]).unwrap();
-    assert_eq!(contents, vec![b"# readme".to_vec()]);
+    assert_padded(&contents[0], b"# readme");
 
     cleanup_tree(name);
 }
@@ -183,8 +209,8 @@ fn cat_expands_glob_patterns() {
 
     let contents = read_files(path_str(&archive), &["*.scm"]).unwrap();
     assert_eq!(contents.len(), 2);
-    assert!(contents.contains(&b"a".to_vec()));
-    assert!(contents.contains(&b"b".to_vec()));
+    assert!(contents.iter().any(|c| c.len() > 0 && c[0] == b'a'));
+    assert!(contents.iter().any(|c| c.len() > 0 && c[0] == b'b'));
 
     cleanup_tree(name);
 }
@@ -201,12 +227,7 @@ fn add_excludes_matching_paths() {
 
     create_archive(path_str(&archive)).unwrap();
     let pattern = temp_root(name).join("folder").join("*");
-    add_files(
-        path_str(&archive),
-        vec![path_str(&pattern)],
-        &["*.scm"],
-    )
-    .unwrap();
+    add_files(path_str(&archive), vec![path_str(&pattern)], &["*.scm"]).unwrap();
 
     let lines = list_archive(path_str(&archive)).unwrap();
     assert!(lines.iter().any(|line| line.contains("notes.txt")));
@@ -345,7 +366,8 @@ fn find_case_insensitive() {
 
     let entries = find_entries(path_str(&archive), &["readme.md"]).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].name, "README.md");
+    // Entry names are normalized to lowercase on add (mirrors cdimagemaker).
+    assert_eq!(entries[0].name, "readme.md");
 
     cleanup_tree(name);
 }

@@ -25,7 +25,7 @@ cargo build --release -p cli
 # Create an empty archive
 img new myarchive.img
 
-# Add one or more files (entry name is the file basename)
+# Add one or more files (entry name is the file basename, normalized to lowercase
 img add myarchive.img file1.txt file2.bin
 
 # Glob patterns are expanded relative to the current directory

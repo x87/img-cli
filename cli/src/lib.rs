@@ -344,7 +344,8 @@ pub fn add_files(img: &str, paths: Vec<&str>, excludes: &[&str]) -> anyhow::Resu
             .with_context(|| format!("failed to get basename for {}", path.display()))?;
         let name = basename
             .to_str()
-            .with_context(|| format!("non-UTF-8 basename in {}", path.display()))?;
+            .with_context(|| format!("non-UTF-8 basename in {}", path.display()))?
+            .to_lowercase();
         if name.len() > MAX_NAME_LEN {
             eprintln!(
                 "warning: filename exceeds maximum length of {MAX_NAME_LEN} bytes, skipping: {name}"
@@ -353,7 +354,7 @@ pub fn add_files(img: &str, paths: Vec<&str>, excludes: &[&str]) -> anyhow::Resu
         }
         let data = std::fs::read(&path)
             .with_context(|| format!("failed to read file {}", path.display()))?;
-        match archive.add_file(&data, name)? {
+        match archive.add_file(&data, name.clone())? {
             AddFileResult::Added => {}
             AddFileResult::DuplicateIgnored => {
                 eprintln!("warning: {name} already exists in archive, skipping");

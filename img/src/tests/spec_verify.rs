@@ -13,7 +13,7 @@ pub fn verify_on_disk_spec(bytes: &[u8], expected: &[(String, Vec<u8>)]) {
         u32::from_le_bytes(bytes[4..HEADER_SIZE].try_into().expect("header count")) as usize;
     assert_eq!(count, expected.len(), "entry count mismatch");
 
-    let payload_base = HEADER_SIZE + count * DIRECTORY_ENTRY_SIZE;
+    let payload_base = crate::metadata::payload_base_for_count(count);
     let expected_by_name: BTreeMap<&str, &[u8]> = expected
         .iter()
         .map(|(name, data)| (name.as_str(), data.as_slice()))
@@ -77,11 +77,12 @@ pub fn verify_on_disk_spec(bytes: &[u8], expected: &[(String, Vec<u8>)]) {
         "directory entries must be sorted by name on disk"
     );
 
-    // Offsets are relative to the start of the payload region.
+    // Offsets are absolute 2048-byte sector positions from the start of the archive
     let mut cursor = 0;
     for (name, offset, sectors) in &parsed_entries {
         assert_eq!(
-            *offset as usize, cursor,
+            *offset as usize * crate::SECTOR_SIZE,
+            payload_base + cursor,
             "payload offset mismatch for {name}"
         );
 

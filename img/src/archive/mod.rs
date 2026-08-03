@@ -1,9 +1,8 @@
+use crate::IMGHeader;
 use crate::header::HEADER_SIZE;
 use crate::metadata::{
-    DIRECTORY_ENTRY_SIZE, FLAG_FREE, FLAG_SCRATCH, ActiveDirectoryTable, IMGEntry, IMGMetadata,
-    MAX_NAME_LEN,
+    ActiveDirectoryTable, FLAG_FREE, FLAG_SCRATCH, IMGEntry, IMGMetadata, MAX_NAME_LEN,
 };
-use crate::IMGHeader;
 use anyhow::{Context, Result, bail};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -141,7 +140,12 @@ impl IMGArchive {
     /// Returns active entries sorted by name with computed layout offsets for display.
     pub fn list_entries(&self) -> Vec<(u32, &IMGEntry)> {
         let mut entries: Vec<_> = self.entries();
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        // uppercased-name comparison, so `img list` mirrors the file.
+        entries.sort_by(|a, b| {
+            a.name
+                .to_ascii_uppercase()
+                .cmp(&b.name.to_ascii_uppercase())
+        });
 
         let mut offset = self.get_payload_start();
         entries
@@ -218,7 +222,8 @@ impl IMGArchive {
 
         let scratch_offset = self.scratch.len() as u32;
         self.scratch.extend_from_slice(buf);
-        self.scratch.resize(self.scratch.len() + padded_len - buf.len(), 0);
+        self.scratch
+            .resize(self.scratch.len() + padded_len - buf.len(), 0);
 
         self.directory.push(IMGEntry {
             sectors: sectors as u16,
@@ -236,7 +241,11 @@ impl IMGArchive {
     /// Returns the number of entries tombstoned.
     pub fn remove_file(&mut self, name: impl AsRef<str>) -> usize {
         let name = name.as_ref();
-        let removed = self.entries().iter().filter(|entry| entry.name == name).count();
+        let removed = self
+            .entries()
+            .iter()
+            .filter(|entry| entry.name == name)
+            .count();
         if removed == 0 {
             return 0;
         }
@@ -261,9 +270,18 @@ impl IMGArchive {
 
         let payload_base = self.get_payload_start();
 
-        let mut entries: Vec<IMGEntry> = self.entries().iter().map(|entry| (*entry).clone()).collect();
+        let mut entries: Vec<IMGEntry> = self
+            .entries()
+            .iter()
+            .map(|entry| (*entry).clone())
+            .collect();
         self.directory.clear();
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        // uppercased name comparison
+        entries.sort_by(|a, b| {
+            a.name
+                .to_ascii_uppercase()
+                .cmp(&b.name.to_ascii_uppercase())
+        });
 
         let mut new_blob = Vec::new();
 
@@ -277,7 +295,7 @@ impl IMGArchive {
                     .payload_blob
                     .as_ref()
                     .context("main blob present for on-disk entry")?;
-                let start = (entry.offset as usize).saturating_sub(self.payload_base as usize);
+                let start = entry.offset as usize;
                 blob[start..start + len].to_vec()
             };
 
@@ -354,7 +372,7 @@ impl IMGArchive {
             .payload_blob
             .as_ref()
             .context("no payload blob available")?;
-        let start = (entry.offset as usize).saturating_sub(self.payload_base as usize);
+        let start = entry.offset as usize;
         if start + len > blob.len() {
             bail!(
                 "entry '{}' offset {} + len {} exceeds payload blob size {}",
@@ -368,7 +386,8 @@ impl IMGArchive {
     }
 
     fn get_payload_start(&self) -> usize {
-        HEADER_SIZE + self.entries().len() * DIRECTORY_ENTRY_SIZE
+        // Match the on-disk sector-aligned payload region base.
+        crate::metadata::payload_base_for_count(self.entries().len())
     }
 
     fn sync_header_count(&mut self) {

@@ -47,7 +47,10 @@ impl IMGDirectoryEntry {
     }
 
     fn decode_name_from_disk(name: &[u8; NAME_FIELD_SIZE]) -> String {
-        let end = name.iter().position(|&byte| byte == 0).unwrap_or(name.len());
+        let end = name
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(name.len());
         String::from_utf8_lossy(&name[..end]).into_owned()
     }
 }
@@ -80,10 +83,7 @@ impl IMGDirectory {
         Ok(Self { entries })
     }
 
-    pub fn read_from<'de, C: Config>(
-        mut reader: impl Reader<'de>,
-        count: u32,
-    ) -> ReadResult<Self> {
+    pub fn read_from<'de, C: Config>(mut reader: impl Reader<'de>, count: u32) -> ReadResult<Self> {
         let mut entries = Vec::with_capacity(count as usize);
         for _ in 0..count {
             entries.push(<IMGDirectoryEntry as SchemaRead<'de, C>>::get(
@@ -98,7 +98,8 @@ impl IMGDirectory {
             .into_iter()
             .map(|e| {
                 let mut entry = IMGEntry::from(e);
-                entry.offset = entry.offset.saturating_add(payload_base);
+                entry.offset = (entry.offset.saturating_mul(crate::SECTOR_SIZE as u32))
+                    .saturating_sub(payload_base);
                 entry
             })
             .collect()
@@ -134,9 +135,22 @@ pub struct IMGMetadata {
     pub directory: IMGDirectory,
 }
 
+/// On-disk byte length of the metadata prefix (header + directory table for
+/// `count` entries).
+pub(crate) fn metadata_len(count: usize) -> usize {
+    HEADER_SIZE + count * DIRECTORY_ENTRY_SIZE
+}
+
+/// Sector-aligned byte offset where the payload region starts for `count`
+/// entries: the first 2048-byte boundary at or after the directory table
+pub fn payload_base_for_count(count: usize) -> usize {
+    let bytes = metadata_len(count);
+    (bytes + crate::SECTOR_SIZE - 1) / crate::SECTOR_SIZE * crate::SECTOR_SIZE
+}
+
 impl IMGMetadata {
     pub fn payload_base(&self) -> u32 {
-        (HEADER_SIZE + self.header.count as usize * DIRECTORY_ENTRY_SIZE) as u32
+        payload_base_for_count(self.header.count as usize) as u32
     }
 
     /// Upper bound on directory entries that fit in `file_len` bytes.
@@ -161,7 +175,7 @@ impl IMGMetadata {
                 file_len
             );
         }
-        let metadata_len = HEADER_SIZE + header.count as usize * DIRECTORY_ENTRY_SIZE;
+        let metadata_len = metadata_len(header.count as usize);
         if file_len < metadata_len {
             bail!("archive truncated: metadata requires {metadata_len} bytes, file has {file_len}");
         }
@@ -226,16 +240,19 @@ impl IMGEntry {
         }
     }
 
-    /// Logical content length in bytes, trimming sector padding when `size` is unset.
+    /// Logical content length in bytes.
+    ///
+    /// When the archive stores a real size in the `size` field (u16), that
+    /// exact length is used.
+    /// Otherwise the full sector-padded payload is returned, trailing zero
+    /// bytes are NOT trimmed, because real payloads may legitimately end in
+    /// `0x00` (e.g. streamed .scm files). The padding is lossless: the
+    /// original bytes are a prefix of the returned slice.
     pub fn content_len(&self, payload: &[u8]) -> usize {
         if self.size != 0 {
             return self.size as usize;
         }
-        payload
-            .iter()
-            .rposition(|&byte| byte != 0)
-            .map(|index| index + 1)
-            .unwrap_or(0)
+        payload.len()
     }
 }
 

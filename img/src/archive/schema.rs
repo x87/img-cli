@@ -16,6 +16,9 @@ unsafe impl<C: Config> SchemaWrite<C> for IMGArchive {
             },
         };
         let mut total = <IMGMetadata as SchemaWrite<C>>::size_of(&metadata)?;
+        // Account for the zero padding between the directory and the payloads.
+        let directory_len = crate::metadata::metadata_len(src.header.count as usize);
+        total += (src.payload_base as usize).saturating_sub(directory_len);
         if let Some(blob) = &src.payload_blob {
             total += blob.len();
         }
@@ -26,10 +29,27 @@ unsafe impl<C: Config> SchemaWrite<C> for IMGArchive {
         let metadata = IMGMetadata {
             header: src.header.clone(),
             directory: IMGDirectory {
-                entries: src.directory.iter().map(IMGDirectoryEntry::from).collect(),
+                entries: src
+                    .directory
+                    .iter()
+                    .map(|entry| {
+                        let mut disk = IMGDirectoryEntry::from(entry);
+                        // Disk layout uses absolute 2048-byte sector offsets
+                        // (classic IMG V2); internal offsets are byte offsets
+                        // relative to the payload region start.
+                        disk.offset = (src.payload_base + entry.offset) / crate::SECTOR_SIZE as u32;
+                        disk
+                    })
+                    .collect(),
             },
         };
         <IMGMetadata as SchemaWrite<C>>::write(writer.by_ref(), &metadata)?;
+        // Pad the directory region out to the sector-aligned payload base so
+        // the stored absolute sector offsets line up with the file contents.
+        let directory_len = crate::metadata::metadata_len(src.header.count as usize);
+        for _ in directory_len..src.payload_base as usize {
+            <u8 as SchemaWrite<C>>::write(writer.by_ref(), &0)?;
+        }
         if let Some(blob) = &src.payload_blob {
             for byte in blob {
                 <u8 as SchemaWrite<C>>::write(writer.by_ref(), byte)?;

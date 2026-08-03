@@ -12,7 +12,9 @@ fn temp_root(name: &str) -> PathBuf {
 }
 
 fn temp_path_nested(name: &str, parts: &[&str]) -> PathBuf {
-    let path = parts.iter().fold(temp_root(name), |base, part| base.join(part));
+    let path = parts
+        .iter()
+        .fold(temp_root(name), |base, part| base.join(part));
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
@@ -152,20 +154,18 @@ fn rebase_sorts_entries_and_assigns_offsets() {
     archive.add_file(b"m", "m.txt").unwrap();
     archive.rebase().unwrap();
 
-    let names: Vec<_> = archive.entries().iter().map(|entry| entry.name.as_str()).collect();
+    let names: Vec<_> = archive
+        .entries()
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
     assert_eq!(names, vec!["a.txt", "m.txt", "z.txt"]);
     assert_eq!(archive.header.count, 3);
 
     // Offsets are relative to the start of the payload region.
     assert_eq!(archive.entries()[0].offset, 0);
-    assert_eq!(
-        archive.entries()[1].offset,
-        crate::SECTOR_SIZE as u32
-    );
-    assert_eq!(
-        archive.entries()[2].offset,
-        2 * crate::SECTOR_SIZE as u32
-    );
+    assert_eq!(archive.entries()[1].offset, crate::SECTOR_SIZE as u32);
+    assert_eq!(archive.entries()[2].offset, 2 * crate::SECTOR_SIZE as u32);
 }
 
 #[test]
@@ -180,11 +180,15 @@ fn list_entries_computes_offsets_without_mutating_archive() {
     assert_eq!(listing[0].1.name, "a.txt");
     assert_eq!(listing[1].1.name, "b.txt");
 
-    let first_offset = HEADER_SIZE + 2 * DIRECTORY_ENTRY_SIZE;
+    let first_offset = crate::metadata::payload_base_for_count(2);
     assert_eq!(listing[0].0, first_offset as u32);
     assert_eq!(listing[1].0, (first_offset + crate::SECTOR_SIZE) as u32);
     assert_eq!(
-        archive.entries().iter().map(|entry| entry.offset).collect::<Vec<_>>(),
+        archive
+            .entries()
+            .iter()
+            .map(|entry| entry.offset)
+            .collect::<Vec<_>>(),
         original_offsets
     );
 }
@@ -209,7 +213,10 @@ fn remove_file_marks_free_without_touching_blob_until_rebase() {
     archive.rebase().unwrap();
     assert_eq!(archive.directory.len(), 1);
     assert_eq!(archive.entries()[0].name, "keep.txt");
-    assert_eq!(archive.payload_blob.as_ref().unwrap().len(), crate::SECTOR_SIZE);
+    assert_eq!(
+        archive.payload_blob.as_ref().unwrap().len(),
+        crate::SECTOR_SIZE
+    );
 
     cleanup(&path);
 }
@@ -262,11 +269,15 @@ fn add_to_existing_archive_uses_scratch_until_rebase() {
     assert_eq!(loaded.entries()[0].name, "first.txt");
     assert_eq!(loaded.entries()[1].name, "second.txt");
     assert_eq!(
-        &loaded.load_payload(directory_index(&loaded, "first.txt")).unwrap()[..5],
+        &loaded
+            .load_payload(directory_index(&loaded, "first.txt"))
+            .unwrap()[..5],
         b"first"
     );
     assert_eq!(
-        &loaded.load_payload(directory_index(&loaded, "second.txt")).unwrap()[..6],
+        &loaded
+            .load_payload(directory_index(&loaded, "second.txt"))
+            .unwrap()[..6],
         b"second"
     );
 
@@ -281,7 +292,9 @@ fn many_removals_rebase_once() {
     let mut archive = IMGArchive::default();
     for i in 0..10 {
         let name = format!("file{i:02}.txt");
-        archive.add_file(format!("data{i}").as_bytes(), &name).unwrap();
+        archive
+            .add_file(format!("data{i}").as_bytes(), &name)
+            .unwrap();
     }
     archive.write(&path).unwrap();
 
@@ -304,6 +317,24 @@ fn many_removals_rebase_once() {
     cleanup(&path);
 }
 
+fn assert_padded(content: &[u8], expected: &[u8]) {
+    assert!(
+        content.len() >= expected.len(),
+        "content {}B shorter than expected {}B",
+        content.len(),
+        expected.len()
+    );
+    assert_eq!(
+        &content[..expected.len()],
+        expected,
+        "content prefix mismatch"
+    );
+    assert!(
+        content[expected.len()..].iter().all(|b| *b == 0),
+        "trailing bytes must be zero padding"
+    );
+}
+
 #[test]
 fn read_file_returns_logical_bytes() {
     let path = temp_path("read-file");
@@ -314,7 +345,7 @@ fn read_file_returns_logical_bytes() {
     archive.write(&path).unwrap();
 
     let mut loaded = IMGArchive::from_path(&path).unwrap();
-    assert_eq!(loaded.read_file("greet.txt").unwrap(), b"hello");
+    assert_padded(&loaded.read_file("greet.txt").unwrap(), b"hello");
 
     cleanup(&path);
 }
@@ -544,7 +575,7 @@ fn load_payload_errors_on_truncated_buffer() {
     archive.write(&path).unwrap();
 
     let mut bytes = fs::read(&path).unwrap();
-    bytes.truncate(HEADER_SIZE + DIRECTORY_ENTRY_SIZE + 16);
+    bytes.truncate(crate::metadata::metadata_len(1) + 16);
     let mut loaded = IMGArchive::from_buf(&bytes).unwrap();
 
     let err = loaded.load_payload(0).unwrap_err();
@@ -563,7 +594,7 @@ fn load_payload_errors_on_truncated_file() {
     archive.write(&path).unwrap();
 
     let mut bytes = fs::read(&path).unwrap();
-    bytes.truncate(HEADER_SIZE + DIRECTORY_ENTRY_SIZE + 16);
+    bytes.truncate(crate::metadata::metadata_len(1) + 16);
     fs::write(&path, bytes).unwrap();
 
     let mut loaded = IMGArchive::from_path(&path).unwrap();
@@ -610,7 +641,7 @@ fn write_read_roundtrip_in_nested_directory() {
     archive.write(&path).unwrap();
 
     let mut loaded = IMGArchive::from_path(&path).unwrap();
-    assert_eq!(loaded.read_file("data.txt").unwrap(), b"nested payload");
+    assert_padded(&loaded.read_file("data.txt").unwrap(), b"nested payload");
 
     cleanup_tree(name);
 }
@@ -630,7 +661,7 @@ fn read_file_writes_to_nested_output_directory() {
     let mut loaded = IMGArchive::from_path(&archive_path).unwrap();
     let content = loaded.read_file("data.txt").unwrap();
     fs::write(&output_path, content).unwrap();
-    assert_eq!(fs::read(&output_path).unwrap(), b"extract me");
+    assert_padded(&fs::read(&output_path).unwrap(), b"extract me");
 
     cleanup_tree(name);
 }
