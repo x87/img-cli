@@ -1,25 +1,8 @@
 # IMG V2
 
-Command-line tool and library for **IMG V2** archives.
+Command-line tool and library for [IMG V2 archives](IMG_SPEC.md).
 
-See [IMG_SPEC.md](IMG_SPEC.md) for the format specification.
-
-## Workspace
-
-| Crate         | Description               |
-| ------------- | ------------------------- |
-| [`img`](img/) | IMG V2 archive library    |
-| [`cli`](cli/) | `img` command-line binary |
-
-## Build
-
-Requires Rust 1.85+ (edition 2024).
-
-```bash
-cargo build --release -p cli
-```
-
-## CLI usage
+## Usage
 
 ```bash
 # Create an empty archive
